@@ -21,3 +21,6 @@ data/processed/
 artifacts/
 
 .streamlit/secrets.toml
+!data/app/
+!data/app/dashboard_predictions.csv
+reports/

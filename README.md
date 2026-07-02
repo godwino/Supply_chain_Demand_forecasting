@@ -1,224 +1,145 @@
 # Retail Demand Forecasting and Inventory Replenishment with MLflow
 
-This project is a production-style starter for retail demand forecasting and reorder recommendation. It combines time-series feature engineering, multi-model training, MLflow experiment tracking, model registry workflows, API serving, and a planner-friendly dashboard.
+## Project Overview
+This project is an end-to-end retail demand forecasting and inventory replenishment application built to show how supply chain data science can move from model training to planner decision support. It forecasts SKU-level demand and converts forecast outputs into practical replenishment decisions such as reorder quantity, safety stock, reorder point, stockout risk, and days of cover.
 
-## What it does
+## Business Problem
+Retail and healthcare distributors need to maintain enough inventory to meet customer demand without tying up too much working capital in excess stock. Poor forecasts can lead to stockouts, missed service-level targets, excess inventory, waste, and poor replenishment decisions. This project forecasts SKU-level demand and converts those predictions into inventory planning recommendations that a planner can use.
 
-- Forecasts next `7`, `14`, or `28` days of demand at `store_id` + `sku_id` level
-- Compares multiple models: naive baseline, gradient boosting, and optional `XGBoost` / `LightGBM`
-- Tracks every training run in MLflow with params, metrics, artifacts, and dataset fingerprint
-- Produces business outputs:
-  - `forecast_units`
-  - `reorder_qty`
-  - `stockout_risk`
-  - `days_of_cover`
-- Serves predictions through FastAPI
-- Shows planner-ready recommendations in Streamlit
+## Why This Matters in Supply Chain
+Demand forecasts matter only when they improve operational decisions. This project connects forecasting outputs to supply chain actions such as replenishment prioritization, inventory coverage assessment, and service-level risk management.
 
-## Repository Layout
+## Dataset
+- Public dataset: UCI Online Retail
+- Data source: transaction-level retail sales
+- Modeling grain: daily demand by geography proxy (`store_id`) and SKU
+- Realistic note: the project uses retail data, not proprietary healthcare or McKesson data
 
-```text
-data/
-  sample/                 # synthetic starter dataset
-  ingest/
-databricks/
-  train_on_databricks.py
-src/
-  supply_chain_forecasting/
-    config.py
-    data.py
-    evaluation.py
-    features.py
-    modeling.py
-    reorder.py
-train.py
-evaluate.py
-register.py
-serve/
-  app.py
-dashboard/
-  app.py
-artifacts/
-```
+## Data Pipeline
+- Download raw Excel data with `data/ingest/download_real_data.py`
+- Clean transactions and aggregate to daily demand
+- Retain high-signal SKU series for tractable local experimentation
+- Save processed data to `data/processed/online_retail_daily.csv`
 
-## Dataset Options
+## Feature Engineering
+- Demand lags: 1, 7, 14, 28 days
+- Rolling means and standard deviation
+- Day-of-week, week-of-year, and month features
+- Price change features
+- Promo proxy and inventory-related fields
 
-- Real public dataset wired into this repo: UCI Online Retail
-- Recommended future upgrade for deeper hierarchy: M5 Forecasting
-- Included for fallback quick start: synthetic sample in `data/sample/retail_demand_sample.csv`
+## Models Used
+- Naive last value
+- HistGradientBoostingRegressor
+- RandomForestRegressor
+- LightGBM
+- XGBoost
 
-To download and prepare the real public dataset:
+## Baseline Models
+- Naive forecast
+- Moving average forecast
+- Seasonal naive forecast
 
-```bash
-C:\Users\Osayamwen\anaconda3\python.exe data/ingest/download_real_data.py
-```
+## Model Evaluation
+The project now supports:
+- MAE
+- RMSE
+- MAPE
+- SMAPE
+- WAPE
+- Forecast bias
+- Bias percentage
+- Total actual demand
+- Total forecast demand
 
-This script downloads the Excel file from the UCI repository, cleans the transactions, aggregates them to daily SKU-country demand, keeps the highest-volume series for a tractable local training set, and writes:
+It also includes expanding-window backtesting so forecasting performance is evaluated using time-aware folds instead of random train/test splits.
 
-- `data/raw/online_retail.xlsx`
-- `data/processed/online_retail_daily.csv`
+## Inventory Planning Logic
+- `days_of_cover = on_hand_inventory / average_daily_forecast`
+- `expected_demand_during_lead_time = average_daily_forecast * lead_time_days`
+- `safety_stock = z_score * demand_std * sqrt(lead_time_days)`
+- `reorder_point = expected_demand_during_lead_time + safety_stock`
+- `reorder_quantity` recommends replenishment when inventory falls below reorder point
+- `stockout_risk` is a bounded risk score between 0 and 1
 
-Notes on realism:
-
-- `sales`, `price`, `date`, `sku_id`, and `store_id` come from the real dataset
-- `store_id` uses `Country` as a retail geography proxy because the dataset does not expose physical store IDs
-- `promo`, `on_hand_inventory`, `lead_time_days`, and `unit_cost` are derived operational features so the replenishment layer can run end-to-end
-
-To adapt M5 later, map its store-item daily demand data into this project schema:
-
-- `date`
-- `store_id`
-- `sku_id`
-- `sales`
-- `price`
-- `promo`
-- `on_hand_inventory`
-- `lead_time_days`
-- `unit_cost`
-
-## Quick Start
-
-1. Create and activate a virtual environment.
-2. Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-3. Download and prepare the real dataset:
-
-```bash
-C:\Users\Osayamwen\anaconda3\python.exe data/ingest/download_real_data.py
-```
-
-4. Train models:
-
-```bash
-C:\Users\Osayamwen\anaconda3\python.exe train.py --data-path data/processed/online_retail_daily.csv --horizon 28
-```
-
-5. Evaluate the most recent champion-ready artifact:
-
-```bash
-python evaluate.py --predictions-path artifacts/latest_predictions.csv
-```
-
-6. Register a trained model in MLflow Model Registry:
-
-```bash
-python register.py --run-id <RUN_ID> --alias challenger
-```
-
-7. Start the API:
-
-```bash
-uvicorn serve.app:app --reload
-```
-
-8. Start the dashboard:
-
-```bash
-streamlit run dashboard/app.py
-```
-
-## Databricks Option
-
-If you want MLflow tracking and model registry in a Databricks workspace instead of local SQLite:
-
-```bash
-set MLFLOW_TRACKING_URI=databricks
-set DATABRICKS_HOST=https://<your-workspace-host>
-set DATABRICKS_TOKEN=<your-personal-access-token>
-set DATABRICKS_EXPERIMENT_PATH=/Shared/retail-demand-forecasting
-C:\Users\Osayamwen\anaconda3\python.exe train.py --data-path data/processed/online_retail_daily.csv --horizon 28 --experiment-name /Shared/retail-demand-forecasting
-```
-
-See [databricks/README.md](C:/Users/Osayamwen/Desktop/supply_chain/databricks/README.md) for the workspace flow.
-
-## MLflow
-
-Default tracking URI:
-
-```text
-sqlite:///mlflow.db
-```
-
-Useful commands:
-
-```bash
-mlflow ui --backend-store-uri sqlite:///mlflow.db
-```
-
-What gets logged:
-
-- model type and hyperparameters
-- train / validation metrics
-- dataset fingerprint
-- feature importance artifact when available
-- validation predictions
-- planner reorder recommendations
-
-## Real Dataset Source
-
-- UCI Online Retail Excel file:
-  https://archive.ics.uci.edu/ml/machine-learning-databases/00352/Online%20Retail.xlsx
+## Dashboard Features
+- Planner workbench focused on store, SKU, and date
+- Scenario testing for inventory, lead time, and service level
+- Ranked action queue for high-priority SKUs
+- SKU explorer for forecast vs actual history
+- Business summary view for operational reporting
 
 ## API Endpoints
-
 - `GET /health`
 - `GET /model-info`
 - `POST /forecast`
 - `POST /predict`
 - `POST /recommendations`
 
-## Example API Requests
+## MLflow Tracking
+- Experiment comparison across models
+- Run parameters and metrics
+- Dataset fingerprint logging
+- Feature importance artifacts
+- Prediction artifacts
+- Model registry support for challenger and champion workflows
 
-`POST /forecast`
+## Monitoring Plan
+- Recent forecast MAE and WAPE
+- Forecast bias tracking
+- Demand drift and prediction drift checks
+- SKU mix changes
+- High stockout risk counts
+- API health placeholders and recommended alert thresholds
 
-```json
-{
-  "records": [
-    {
-      "date": "2024-06-01",
-      "store_id": "CA_1",
-      "sku_id": "SKU_001",
-      "sales": 18,
-      "price": 8.99,
-      "promo": 1,
-      "on_hand_inventory": 42,
-      "lead_time_days": 5,
-      "unit_cost": 3.2
-    }
-  ],
-  "horizon": 14,
-  "service_level": 0.95
-}
+## Assumptions and Limitations
+- Public data is retail transaction data, not actual McKesson or pharmaceutical data.
+- On-hand inventory and lead time assumptions may be simulated or user-adjustable.
+- The project demonstrates how forecast outputs can support replenishment decisions.
+- It is an applied MVP, not a full enterprise production system.
+
+## How This Applies to Pharmaceutical Distribution
+Although this project uses public retail transaction data, the same forecasting and replenishment logic can support pharmaceutical distribution use cases such as stockout risk monitoring, service-level planning, days-of-supply analysis, inventory prioritization, and replenishment recommendations. In a healthcare setting, additional constraints such as expiry dates, cold-chain requirements, supplier lead time variability, regulatory handling rules, and patient/customer impact would also be considered.
+
+## How to Run Locally
+```bash
+pip install -r requirements.txt
+python data/ingest/download_real_data.py
+python train.py --data-path data/processed/online_retail_daily.csv --horizon 28
+python scripts/run_baseline_evaluation.py
+python scripts/run_backtesting.py
+python scripts/run_data_validation.py
+python scripts/run_monitoring_report.py
+streamlit run dashboard/app.py
+uvicorn serve.app:app --reload
 ```
 
-`POST /recommendations`
-
-```json
-{
-  "items": [
-    {
-      "store_id": "UNITED_KINGDOM",
-      "sku_id": "85123A"
-    },
-    {
-      "store_id": "UNITED_KINGDOM",
-      "sku_id": "85099B",
-      "as_of_date": "2011-12-09"
-    }
-  ],
-  "horizon": 28,
-  "service_level": 0.95
-}
+## How to Run with Docker
+```bash
+docker compose up --build
 ```
 
-## Next Iterations
+## Repository Structure
+```text
+src/
+  business/
+  evaluation/
+  models/
+  monitoring/
+  supply_chain_forecasting/
+  validation/
+scripts/
+dashboard/
+serve/
+data/
+docs/
+reports/
+tests/
+```
 
-- Replace synthetic data with M5 raw inputs
-- Add scheduled retraining
-- Add drift checks on demand, promo rate, and price distribution
-- Promote `challenger` and `champion` aliases automatically after approval
-- Containerize API with MLflow model serving or Docker Compose
+## Future Improvements
+- Probabilistic forecasting
+- Automated retraining
+- ERP and warehouse system integration
+- Expiry-aware and cold-chain-aware planning logic
+- Role-based dashboard access

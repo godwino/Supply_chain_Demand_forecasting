@@ -27,6 +27,10 @@ def urgency_bucket(row: pd.Series) -> str:
     return "Stable"
 
 
+def priority_score(row: pd.Series) -> float:
+    return float(row["reorder_qty"]) + float(row["stockout_risk"]) * 1000.0 + max(0.0, 200.0 - float(row["days_of_cover"]))
+
+
 st.set_page_config(page_title="Retail Demand Planner", page_icon=":bar_chart:", layout="wide")
 st.title("Retail Demand Planner")
 st.caption("Interactive planner workspace for forecast review, replenishment decisions, and what-if analysis.")
@@ -51,6 +55,7 @@ df["forecast_bias_pct"] = df["forecast_error"] / df["actual_sales"].clip(lower=1
 df["urgency"] = df.apply(urgency_bucket, axis=1)
 df["daily_forecast_units"] = df["forecast_units"] / 28.0
 df["inventory_value"] = df["on_hand_inventory"] * df["unit_cost"]
+df["priority_score"] = df.apply(priority_score, axis=1)
 
 store_options = sorted(df["store_id"].unique())
 default_store = "UNITED_KINGDOM" if "UNITED_KINGDOM" in store_options else store_options[0]
@@ -58,15 +63,20 @@ default_store = "UNITED_KINGDOM" if "UNITED_KINGDOM" in store_options else store
 st.sidebar.header("Planner Controls")
 selected_store = st.sidebar.selectbox("Store", options=store_options, index=store_options.index(default_store))
 store_df = df[df["store_id"] == selected_store].copy()
+default_focus_row = store_df.sort_values(["priority_score", "stockout_risk", "reorder_qty"], ascending=False).iloc[0]
 
 sku_options = sorted(store_df["sku_id"].unique())
-selected_sku = st.sidebar.selectbox("Focus SKU", options=sku_options, index=0)
+default_sku = default_focus_row["sku_id"]
+selected_sku = st.sidebar.selectbox("Focus SKU", options=sku_options, index=sku_options.index(default_sku))
+sku_date_options = sorted(store_df[store_df["sku_id"] == selected_sku]["date"].dt.strftime("%Y-%m-%d").unique())
+default_date = default_focus_row["date"].strftime("%Y-%m-%d") if default_focus_row["sku_id"] == selected_sku else sku_date_options[-1]
 selected_date = st.sidebar.selectbox(
     "As-of date",
-    options=sorted(store_df[store_df["sku_id"] == selected_sku]["date"].dt.strftime("%Y-%m-%d").unique()),
+    options=sku_date_options,
+    index=sku_date_options.index(default_date) if default_date in sku_date_options else len(sku_date_options) - 1,
 )
-risk_threshold = st.sidebar.slider("Minimum stockout risk", min_value=0.0, max_value=1.0, value=0.05, step=0.05)
-show_only_reorder = st.sidebar.checkbox("Only show reorder actions", value=False)
+risk_threshold = st.sidebar.slider("Minimum stockout risk", min_value=0.0, max_value=1.0, value=0.0, step=0.05)
+show_only_reorder = st.sidebar.checkbox("Only show reorder actions", value=True)
 
 selected_row = store_df[
     (store_df["sku_id"] == selected_sku) & (store_df["date"].dt.strftime("%Y-%m-%d") == selected_date)
@@ -127,15 +137,24 @@ actionable_df = store_df[store_df["stockout_risk"] >= risk_threshold].copy()
 if show_only_reorder:
     actionable_df = actionable_df[actionable_df["reorder_qty"] > 0]
 actionable_df = actionable_df.sort_values(
-    ["reorder_qty", "stockout_risk", "forecast_units"],
-    ascending=[False, False, False],
+    ["priority_score", "reorder_qty", "stockout_risk", "forecast_units"],
+    ascending=[False, False, False, False],
 )
+selected_store_metrics = business_metrics(store_df)
+action_sku_count = int((store_df["reorder_qty"] > 0).sum())
+watch_sku_count = int((store_df["stockout_risk"] >= 0.10).sum())
+top_priority = store_df.sort_values(["priority_score", "reorder_qty", "stockout_risk"], ascending=False).iloc[0]
 
 top1, top2, top3, top4 = st.columns(4)
-top1.metric("Avg Reorder Qty", f"{metrics['avg_reorder_qty']:.1f}")
-top2.metric("Risk Rate", format_percent(metrics["stockout_risk_rate"]))
-top3.metric("Avg Days Of Cover", f"{metrics['avg_days_of_cover']:.1f}")
-top4.metric("Projected Margin", f"${metrics['projected_margin']:,.0f}")
+top1.metric("Avg Reorder Qty", f"{selected_store_metrics['avg_reorder_qty']:.1f}")
+top2.metric("Risk Rate", format_percent(selected_store_metrics["stockout_risk_rate"]))
+top3.metric("Avg Days Of Cover", f"{selected_store_metrics['avg_days_of_cover']:.1f}")
+top4.metric("Projected Margin", f"${selected_store_metrics['projected_margin']:,.0f}")
+
+st.markdown(
+    f"**Store snapshot:** {action_sku_count} reorder actions, {watch_sku_count} SKUs above 10% stockout risk, "
+    f"top priority SKU is **{top_priority['sku_id']}** on **{pd.to_datetime(top_priority['date']).strftime('%Y-%m-%d')}**."
+)
 
 hero_left, hero_right = st.columns([1.3, 1])
 
@@ -154,7 +173,7 @@ with hero_left:
 
     trend_df = store_df[store_df["sku_id"] == selected_sku].sort_values("date").copy()
     trend_df = trend_df.set_index("date")[["actual_sales", "forecast_units"]]
-    st.line_chart(trend_df, use_container_width=True)
+    st.line_chart(trend_df, width="stretch")
 
 with hero_right:
     st.subheader("Scenario Recommendation")
@@ -175,31 +194,34 @@ with hero_right:
             {"Metric": "Safety stock", "Current": current["safety_stock"], "Scenario": scenario["safety_stock"]},
         ]
     )
-    st.dataframe(scenario_table, use_container_width=True, hide_index=True)
+    st.dataframe(scenario_table, width="stretch", hide_index=True)
 
 tab1, tab2, tab3 = st.tabs(["Action Queue", "SKU Explorer", "Business View"])
 
 with tab1:
     st.subheader("Priority Action Queue")
     st.caption("Sorted to surface the most urgent replenishment opportunities for the selected store.")
-    st.dataframe(
-        actionable_df[
-            [
-                "date",
-                "sku_id",
-                "urgency",
-                "actual_sales",
-                "forecast_units",
-                "on_hand_inventory",
-                "reorder_qty",
-                "stockout_risk",
-                "days_of_cover",
-                "inventory_value",
-            ]
-        ].head(50),
-        use_container_width=True,
-        hide_index=True,
-    )
+    if actionable_df.empty:
+        st.info("No SKUs match the current filters. Lower the risk threshold or turn off `Only show reorder actions`.")
+    else:
+        st.dataframe(
+            actionable_df[
+                [
+                    "date",
+                    "sku_id",
+                    "urgency",
+                    "actual_sales",
+                    "forecast_units",
+                    "on_hand_inventory",
+                    "reorder_qty",
+                    "stockout_risk",
+                    "days_of_cover",
+                    "inventory_value",
+                ]
+            ].head(50),
+            width="stretch",
+            hide_index=True,
+        )
 
 with tab2:
     st.subheader("Focused SKU Explorer")
@@ -218,7 +240,7 @@ with tab2:
     ]
     st.dataframe(
         store_df[store_df["sku_id"] == selected_sku][explorer_cols].sort_values("date", ascending=False),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -235,4 +257,4 @@ with tab3:
         )
         .sort_values(["reorder_qty", "stockout_risk", "forecast_units"], ascending=[False, False, False])
     )
-    st.dataframe(agg_df.head(25), use_container_width=True, hide_index=True)
+    st.dataframe(agg_df.head(25), width="stretch", hide_index=True)

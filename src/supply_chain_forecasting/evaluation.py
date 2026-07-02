@@ -5,14 +5,22 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from evaluation.forecast_metrics import calculate_forecast_metrics
+
 
 def regression_metrics(y_true: pd.Series, y_pred: np.ndarray) -> dict[str, float]:
-    error = np.asarray(y_true) - np.asarray(y_pred)
-    mae = float(np.mean(np.abs(error)))
-    rmse = float(np.sqrt(np.mean(error**2)))
-    mape = float(np.mean(np.abs(error) / np.clip(np.abs(y_true), 1, None)) * 100)
-    bias = float(np.mean(y_pred - y_true))
-    return {"mae": mae, "rmse": rmse, "mape": mape, "bias": bias}
+    metrics = calculate_forecast_metrics(y_true, y_pred)
+    return {
+        "mae": metrics["mae"],
+        "rmse": metrics["rmse"],
+        "mape": metrics["mape"],
+        "smape": metrics["smape"],
+        "wape": metrics["wape"],
+        "bias": metrics["forecast_bias"],
+        "bias_percentage": metrics["bias_percentage"],
+        "total_actual_demand": metrics["total_actual_demand"],
+        "total_forecast_demand": metrics["total_forecast_demand"],
+    }
 
 
 def business_metrics(predictions: pd.DataFrame) -> dict[str, float]:
