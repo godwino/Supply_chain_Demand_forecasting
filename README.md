@@ -163,9 +163,17 @@ What gets logged:
 - UCI Online Retail Excel file:
   https://archive.ics.uci.edu/ml/machine-learning-databases/00352/Online%20Retail.xlsx
 
-## Example API Request
+## API Endpoints
 
-`POST /predict`
+- `GET /health`
+- `GET /model-info`
+- `POST /forecast`
+- `POST /predict`
+- `POST /recommendations`
+
+## Example API Requests
+
+`POST /forecast`
 
 ```json
 {
@@ -183,6 +191,26 @@ What gets logged:
     }
   ],
   "horizon": 14,
+  "service_level": 0.95
+}
+```
+
+`POST /recommendations`
+
+```json
+{
+  "items": [
+    {
+      "store_id": "UNITED_KINGDOM",
+      "sku_id": "85123A"
+    },
+    {
+      "store_id": "UNITED_KINGDOM",
+      "sku_id": "85099B",
+      "as_of_date": "2011-12-09"
+    }
+  ],
+  "horizon": 28,
   "service_level": 0.95
 }
 ```
